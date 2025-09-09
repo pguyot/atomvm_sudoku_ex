@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AtomVM Sudoku Ex</title>
+    <style>
+        body {
+            font-size: 1.2em;
+            font-family: sans-serif;
+            max-width: 800px;
+            padding: 1em;
+            margin: 0 auto;
+            background-color: #161616;
+            color: #fcfcfc;
+        }
+        
+        .sudoku-grid {
+            border-collapse: collapse;
+            margin: 20px auto;
+            border: 3px solid #fcfcfc;
+        }
+        
+        .sudoku-grid td {
+            width: 40px;
+            height: 40px;
+            text-align: center;
+            vertical-align: middle;
+            border: 1px solid #888;
+            cursor: pointer;
+        }
+        
+        .sudoku-grid td.hint {
+            background-color: #333;
+            font-weight: bold;
+            cursor: default;
+        }
+        
+        .sudoku-grid td.input {
+            background-color: #222;
+        }
+        
+        .sudoku-grid td.input:hover {
+            background-color: #444;
+        }
+        
+        .sudoku-grid caption {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        .help {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            border-radius: 4px;
+        }
+        
+        .help:hover {
+            background-color: #45a049;
+        }
+        
+        .loader-countdown {
+            font-size: 3em;
+            text-align: center;
+            color: #4CAF50;
+            margin: 20px;
+        }
+        
+        .loader-caption {
+            text-align: center;
+            margin: 20px;
+            font-style: italic;
+        }
+        
+        .late-loader-caption {
+            text-align: center;
+            margin: 20px;
+            color: #ff6b6b;
+            font-style: italic;
+        }
+        
+        /* Add thicker borders for 3x3 boxes */
+        .sudoku-grid tr:nth-child(3n+1) td {
+            border-top: 3px solid #fcfcfc;
+        }
+        
+        .sudoku-grid td:nth-child(3n+1) {
+            border-left: 3px solid #fcfcfc;
+        }
+    </style>
+    <script type="module">
+        import { Popcorn } from "./wasm/popcorn.js";
+
+        await Popcorn.init({ onStdout: console.log });
+    </script>
+</head>
+<body>
+    <div id="root">
+        <h1>AtomVM Sudoku Ex</h1>
+        <p>Loading...</p>
+    </div>
+</body>
+</html>
