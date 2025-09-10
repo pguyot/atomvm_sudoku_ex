@@ -26,3 +26,4 @@ atomvm_sudoku_ex-*.tar
 /tmp/
 
 /static/wasm
+.DS_Store

@@ -51,7 +51,6 @@ defmodule AtomvmSudokuEx.SudokuGrid do
   @spec parallel_random_puzzle(random_generator(), pos_integer(), pos_integer(), timeout()) ::
           {puzzle :: puzzle_grid(), solution :: puzzle_grid()}
   def parallel_random_puzzle(random_generator, max_hint, schedulers, timeout) do
-    IO.puts("parallel_random_puzzle starting with max_hint=#{max_hint}, schedulers=#{schedulers}, timeout=#{timeout}")
     parent = self()
     start = :erlang.system_time(:millisecond)
 
@@ -61,7 +60,6 @@ defmodule AtomvmSudokuEx.SudokuGrid do
         ~c"ATOM" -> [{:heap_growth, :fibonacci}]
       end
 
-    IO.puts("Spawning #{schedulers} worker processes...")
     workers =
       for _ <- 1..schedulers do
         :erlang.spawn_opt(
@@ -70,19 +68,13 @@ defmodule AtomvmSudokuEx.SudokuGrid do
         )
       end
 
-    IO.puts("Workers spawned, entering main loop...")
     parallel_random_puzzle_loop(start, max_hint, workers, timeout, :infinity, nil, nil)
   end
 
   defp parallel_random_puzzle_worker_loop(random_generator, parent, best_candidate) do
-    IO.puts("Worker generating puzzle...")
-    start_time = :erlang.system_time(:millisecond)
     {hints, puzzle, solution} = random_puzzle(random_generator)
-    end_time = :erlang.system_time(:millisecond)
-    IO.puts("Worker generated puzzle with #{hints} hints in #{end_time - start_time}ms")
 
     if hints < best_candidate do
-      IO.puts("Found better puzzle with #{hints} hints, sending to parent")
       send(parent, {self(), hints, puzzle, solution})
       parallel_random_puzzle_worker_loop(random_generator, parent, hints)
     else
@@ -163,14 +155,13 @@ defmodule AtomvmSudokuEx.SudokuGrid do
   @spec random_puzzle(random_generator()) ::
           {hints :: pos_integer(), puzzle :: puzzle_grid(), solution :: puzzle_grid()}
   def random_puzzle(random_generator) do
-    IO.puts("Generating random solution...")
     solution_grid = random_solution(random_generator)
-    IO.puts("Solution generated, shuffling cells...")
     all_cells = for x <- 1..9, y <- 1..9, do: {x, y}
     shuffled_cells = shuffle(random_generator, all_cells)
-    IO.puts("Cells shuffled, removing values until multiple solutions...")
-    {hints, puzzle_grid} = remove_values_until_multiple_solutions(solution_grid, shuffled_cells, [])
-    IO.puts("Found puzzle with #{hints} hints")
+
+    {hints, puzzle_grid} =
+      remove_values_until_multiple_solutions(solution_grid, shuffled_cells, [])
+
     {hints, puzzle_grid, work_to_puzzle_grid(solution_grid)}
   end
 
@@ -317,7 +308,13 @@ defmodule AtomvmSudokuEx.SudokuGrid do
     end
   end
 
-  defp set_grid_value_and_propagate_update_cell({cell_x, cell_y}, cell_values, value, acc_grid, acc_list) do
+  defp set_grid_value_and_propagate_update_cell(
+         {cell_x, cell_y},
+         cell_values,
+         value,
+         acc_grid,
+         acc_list
+       ) do
     case Enum.member?(cell_values, value) do
       true ->
         new_cell_values = List.delete(cell_values, value)
@@ -490,7 +487,9 @@ defmodule AtomvmSudokuEx.SudokuGrid do
   end
 
   defp is_set_valid(list) do
-    Enum.uniq(list) == Enum.sort(list)
+    # Equivalent to Erlang: lists:usort(List) =:= lists:sort(List)
+    # usort removes duplicates AND sorts, sort only sorts
+    Enum.uniq(list) |> Enum.sort() == Enum.sort(list)
   end
 
   @spec is_solved(puzzle_grid()) :: boolean()

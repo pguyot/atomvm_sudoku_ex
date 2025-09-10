@@ -1,5 +1,7 @@
 defmodule AtomvmSudokuEx.Main do
   use GenServer
+  import Popcorn.Wasm, only: [is_wasm_message: 1]
+  alias Popcorn.Wasm
   alias AtomvmSudokuEx.{Dom, SudokuGrid}
 
   @process_name :main
@@ -50,67 +52,55 @@ defmodule AtomvmSudokuEx.Main do
   end
 
   def handle_info({:puzzle, puzzle, solution}, state) do
-    IO.puts("Received puzzle message with #{map_size(puzzle)} cells")
     end_time = :erlang.system_time(:millisecond)
     delta = end_time - state.start
-    IO.puts("Creating puzzle script...")
     puzzle_script = create_puzzle_script(puzzle, delta)
-    IO.puts("Running puzzle script...")
     Popcorn.Wasm.run_js(puzzle_script)
 
-    Enum.each(puzzle, fn {{x, y}, val} ->
-      case val do
-        0 ->
-          cell_id = puzzle_cell_id(x, y)
-          {:ok, cell_ref} = Popcorn.Wasm.run_js("() => document.querySelector('##{cell_id}')")
-          {:ok, _ref} = Popcorn.Wasm.register_event_listener(:click, [
-            target_node: cell_ref,
-            custom_data: {x, y}
-          ])
-
-        _ ->
-          :ok
-      end
-    end)
-
-    {:ok, help_button_ref} = Popcorn.Wasm.run_js("() => document.querySelector('button.help')")
-    {:ok, _ref} = Popcorn.Wasm.register_event_listener(:click, [
-      target_node: help_button_ref,
-      custom_data: :help
-    ])
+    register_puzzle_events(puzzle)
 
     {:noreply, %{state | grid: puzzle, solution: solution, start: end_time}}
   end
 
-  def handle_info({:wasm_event, :click, _event_data, :help}, state) do
-    {update_script, new_grid} = help_script(state.grid, state.solution)
-    Popcorn.Wasm.run_js(update_script)
+  @impl GenServer
+  def handle_info(raw_msg, state) when is_wasm_message(raw_msg) do
+    new_state =
+      Wasm.handle_message!(raw_msg, fn
+        {:wasm_cast, ["click", "button.help", _dataset]} ->
+          {update_script, new_grid} = help_script(state.grid, state.solution)
+          Popcorn.Wasm.run_js(update_script)
+          %{state | grid: new_grid, help_uses: state.help_uses + 1}
 
-    {:noreply, %{state | grid: new_grid, help_uses: state.help_uses + 1}}
+        {:wasm_cast, ["click", cell_selector, %{"x" => x_str, "y" => y_str}]}
+        when is_binary(cell_selector) ->
+          x = String.to_integer(x_str)
+          y = String.to_integer(y_str)
+          position = {x, y}
+          end_time = :erlang.system_time(:millisecond)
+          old_value = Map.get(state.grid, position)
+
+          new_value = find_next_value(state.grid, position, old_value)
+          new_grid = Map.put(state.grid, position, new_value)
+          update_script = puzzle_update_value_script(position, new_value)
+          Popcorn.Wasm.run_js(update_script)
+
+          case SudokuGrid.is_solved(new_grid) do
+            true ->
+              solved_script = puzzle_solved_script(end_time - state.start, state.help_uses)
+              Popcorn.Wasm.run_js(solved_script)
+
+            false ->
+              :ok
+          end
+
+          %{state | grid: new_grid}
+      end)
+
+    {:noreply, new_state}
   end
 
-  def handle_info({:wasm_event, :click, _event_data, {_x, _y} = position}, state) do
-    end_time = :erlang.system_time(:millisecond)
-    old_value = Map.get(state.grid, position)
-    new_value = find_next_value(state.grid, position, old_value)
-    new_grid = Map.put(state.grid, position, new_value)
-    update_script = puzzle_update_value_script(position, new_value)
-    Popcorn.Wasm.run_js(update_script)
-
-    case SudokuGrid.is_solved(new_grid) do
-      true ->
-        solved_script = puzzle_solved_script(end_time - state.start, state.help_uses)
-        Popcorn.Wasm.run_js(solved_script)
-
-      false ->
-        :ok
-    end
-
-    {:noreply, %{state | grid: new_grid}}
-  end
-
-  def handle_info(msg, state) do
-    IO.puts("Received unexpected message: #{inspect(msg)}")
+  @impl GenServer
+  def handle_info(_msg, state) do
     {:noreply, state}
   end
 
@@ -121,25 +111,27 @@ defmodule AtomvmSudokuEx.Main do
 
   defp loader_init_script(count_down) do
     {script, _} = Dom.append_child_script("#root", loader_element(count_down), 1)
-    "() => { void (#{script}); }"
+    script_str = IO.iodata_to_binary(script)
+    "(config) => { #{script_str}; }"
   end
 
   defp loader_update_script(n) when n > 0 do
     {script, _} = Dom.replace_children_script(".loader-countdown", Integer.to_string(n), 1)
-    "() => { void (#{script}); }"
+    script_str = IO.iodata_to_binary(script)
+    "(config) => { #{script_str}; }"
   end
 
   defp loader_update_script(0) do
     {script, _} = Dom.replace_children_script("#loader", late_loader_element(), 1)
-    "() => { void (#{script}); }"
+    script_str = IO.iodata_to_binary(script)
+    "(config) => { #{script_str}; }"
   end
 
   defp create_puzzle_script(puzzle, delta) do
     {script, _} = Dom.replace_with_script("#loader", puzzle_table(puzzle, delta), 1)
     script_str = IO.iodata_to_binary(script)
     # Ensure the function doesn't return the result of the DOM operation
-    final_script = "() => { void (#{script_str}); }"
-    IO.puts("Generated puzzle script: #{String.slice(final_script, 0, 200)}...")
+    final_script = "(config) => { #{script_str}; }"
     final_script
   end
 
@@ -252,27 +244,32 @@ defmodule AtomvmSudokuEx.Main do
   end
 
   defp generate_grid(parent) do
-    IO.puts("Starting grid generation...")
     random_generator = fn x -> rem(:rand.uniform(x * 1000), x) + 1 end
 
-    IO.puts("Calling parallel_random_puzzle with max_processing_time: #{@max_processing_time}")
-    start_time = :erlang.system_time(:millisecond)
-    
     {puzzle, solution} =
       SudokuGrid.parallel_random_puzzle(random_generator, 25, 4, @max_processing_time)
-
-    end_time = :erlang.system_time(:millisecond)
-    IO.puts("Grid generation completed in #{end_time - start_time}ms")
 
     send(parent, {:puzzle, puzzle, solution})
   end
 
   defp find_next_value(grid, position, old_value) do
-    candidate = rem(old_value + 1, 10)
+    find_next_value(grid, position, old_value, old_value, 0)
+  end
+
+  defp find_next_value(_grid, _position, _current_value, _original_value, attempts)
+       when attempts >= 10 do
+    0
+  end
+
+  defp find_next_value(grid, position, current_value, original_value, attempts) do
+    candidate = rem(current_value + 1, 10)
 
     case SudokuGrid.is_move_valid(grid, position, candidate) do
-      true -> candidate
-      false -> find_next_value(grid, position, candidate)
+      true ->
+        candidate
+
+      false ->
+        find_next_value(grid, position, candidate, original_value, attempts + 1)
     end
   end
 
@@ -286,7 +283,8 @@ defmodule AtomvmSudokuEx.Main do
       end
 
     {script, _} = Dom.replace_children_script("##{id}", content, 1)
-    "() => { void (#{script}); }"
+    script_str = IO.iodata_to_binary(script)
+    "(config) => { #{script_str}; }"
   end
 
   defp puzzle_solved_script(delta_ms, help_uses) do
@@ -298,7 +296,8 @@ defmodule AtomvmSudokuEx.Main do
       end
 
     {script, _} = Dom.replace_children_script(".sudoku-grid caption", solved_caption_text, 1)
-    "() => { void (#{script}); }"
+    script_str = IO.iodata_to_binary(script)
+    "(config) => { #{script_str}; }"
   end
 
   defp help_script(grid, solution) do
@@ -325,7 +324,8 @@ defmodule AtomvmSudokuEx.Main do
             1
           )
 
-        {"() => { void (#{script}); }", grid}
+        script_str = IO.iodata_to_binary(script)
+        {"(config) => { #{script_str}; }", grid}
 
       {[], _} ->
         help_with(&help_with_hint/2, grid, hints)
@@ -343,16 +343,55 @@ defmodule AtomvmSudokuEx.Main do
   end
 
   defp help_with_hint(grid, {{x, y}, val}) do
-    {raw_script, _} = Dom.replace_children_script("##{puzzle_cell_id(x, y)}", Integer.to_string(val), 1)
-    script = "() => { void (#{raw_script}); }"
+    {raw_script, _} =
+      Dom.replace_children_script("##{puzzle_cell_id(x, y)}", Integer.to_string(val), 1)
+
+    script_str = IO.iodata_to_binary(raw_script)
+    script = "(config) => { #{script_str}; }"
     new_grid = Map.put(grid, {x, y}, val)
     {script, new_grid}
   end
 
   defp help_with_error(grid, {x, y}) do
     {raw_script, _} = Dom.replace_children_script("##{puzzle_cell_id(x, y)}", "", 1)
-    script = "() => { void (#{raw_script}); }"
+    script_str = IO.iodata_to_binary(raw_script)
+    script = "(config) => { #{script_str}; }"
     new_grid = Map.put(grid, {x, y}, 0)
     {script, new_grid}
+  end
+
+  defp register_puzzle_events(puzzle) do
+    empty_cells =
+      puzzle
+      |> Enum.filter(fn {{_x, _y}, val} -> val == 0 end)
+      |> Enum.map(fn {{x, y}, _val} -> "##{puzzle_cell_id(x, y)}" end)
+
+    all_selectors = ["button.help" | empty_cells]
+
+    Popcorn.Wasm.run_js!(
+      """
+      ({ wasm, args }) => {
+        const { selectors, event_name, event_receiver } = args;
+        selectors.forEach((selector) => {
+          const nodes = document.querySelectorAll(selector);
+          const fn = (event) => {
+            const cellMatch = selector.match(/^#cell-(\\d+)-(\\d+)$/);
+            if (cellMatch) {
+              const [, x, y] = cellMatch;
+              wasm.cast(event_receiver, ["click", selector, { x, y }]);
+            } else {
+              wasm.cast(event_receiver, ["click", selector, event.target.dataset]);
+            }
+          };
+          nodes.forEach((node) => node.addEventListener(event_name, fn));
+        });
+      }
+      """,
+      %{
+        event_name: "click",
+        selectors: all_selectors,
+        event_receiver: @process_name
+      }
+    )
   end
 end
