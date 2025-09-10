@@ -48,6 +48,8 @@ jobs:
           path: static
       - name: Deploy to netlify
         run: |
+          mkdir .netlify
+          chmod ugo+rw .netlify
           docker container run \
            -e NETLIFY_AUTH_TOKEN=$NETLIFY_AUTH_TOKEN \
            -e NETLIFY_SITE_ID=$NETLIFY_SITE_ID \
