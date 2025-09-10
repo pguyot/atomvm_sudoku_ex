@@ -1,5 +1,5 @@
 #
-#  Copyright 2023 Paul Guyot <pguyot@kallisys.net>
+#  Copyright 2025 Paul Guyot <pguyot@kallisys.net>
 #
 #  SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 #
@@ -11,10 +11,17 @@ on: ["push"]
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: elixir:1.17.3-otp-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: 26.0.2
+          elixir-version: 1.17.3
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://repo.hex.pm
+            https://cdn.jsdelivr.net/hex
       - name: Install dependencies
         run: |
           mix deps.get
